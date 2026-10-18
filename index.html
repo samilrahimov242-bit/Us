@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Дорожная Гонка</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: Arial, sans-serif; touch-action: none; user-select: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #score { position: absolute; top: 20px; left: 20px; color: white; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        #restart-btn { position: absolute; top: 20px; right: 20px; padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: #ff4757; color: white; border: none; border-radius: 8px; pointer-events: auto; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: none; }
+        #steering-container { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 120px; height: 120px; pointer-events: auto; display: flex; justify-content: center; align-items: center; }
+        #steering-wheel { width: 100%; height: 100%; border-radius: 50%; border: 8px solid #333; box-sizing: border-box; position: relative; background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 15px rgba(0,0,0,0.5); }
+        #steering-wheel::before, #steering-wheel::after { content: ''; position: absolute; background: #333; }
+        #steering-wheel::before { top: 0; left: 50%; width: 6px; height: 100%; transform: translateX(-50%); }
+        #steering-wheel::after { top: 50%; left: 0; width: 100%; height: 6px; transform: translateY(-50%); }
+        #steering-center { position: absolute; width: 30px; height: 30px; background: #555; border-radius: 50%; z-index: 2; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        #game-over { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 32px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); display: none; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="score">Счёт: 0</div>
+        <button id="restart-btn">Рестарт</button>
+        <div id="game-over">АВАРИЯ!<br><span style="font-size: 18px;">Нажми "Рестарт"</span></div>
+        
+        <div id="steering-container">
+            <div id="steering-wheel">
+                <div id="steering-center"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 30, 120);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 6, 12);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        dirLight.shadow.camera.left = -20;
+        dirLight.shadow.camera.right = 20;
+        dirLight.shadow.camera.top = 20;
+        dirLight.shadow.camera.bottom = -20;
+        dirLight.shadow.camera.far = 50;
+        scene.add(dirLight);
+
+        // Дорога
+        const roadWidth = 8;
+        const roadLength = 200;
+        const road = new THREE.Mesh(new THREE.PlaneGeometry(roadWidth, roadLength), new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }));
+        road.rotation.x = -Math.PI / 2; road.receiveShadow = true; scene.add(road);
+
+        const lines = [];
+        for (let i = -roadLength / 2; i < roadLength / 2; i += 4) {
+            const line = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 2), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            line.rotation.x = -Math.PI / 2; line.position.set(0, 0.01, i); line.receiveShadow = true;
+            scene.add(line); lines.push(line);
+        }
+
+        const grassMat = new THREE.MeshStandardMaterial({ color: 0x2E8B57 });
+        const grassLeft = new THREE.Mesh(new THREE.PlaneGeometry(100, roadLength), grassMat);
+        grassLeft.rotation.x = -Math.PI / 2; grassLeft.position.set(-roadWidth/2 - 50, -0.1, 0); grassLeft.receiveShadow = true; scene.add(grassLeft);
+        const grassRight = new THREE.Mesh(new THREE.PlaneGeometry(100, roadLength), grassMat);
+        grassRight.rotation.x = -Math.PI / 2; grassRight.position.set(roadWidth/2 + 50, -0.1, 0); grassRight.receiveShadow = true; scene.add(grassRight);
+
+        const objects = [];
+        function createTree() {
+            const group = new THREE.Group();
+            const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 2), new THREE.MeshStandardMaterial({color: 0x8B4513}));
+            trunk.position.y = 1; trunk.castShadow = true;
+            const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.5, 4, 8), new THREE.MeshStandardMaterial({color: 0x228B22}));
+            leaves.position.y = 3; leaves.castShadow = true;
+            group.add(trunk, leaves); return group;
+        }
+        function createHouse() {
+            const group = new THREE.Group();
+            const base = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4), new THREE.MeshStandardMaterial({color: 0xEEDC82}));
+            base.position.y = 2; base.castShadow = true; base.receiveShadow = true;
+            const roof = new THREE.Mesh(new THREE.ConeGeometry(3.5, 2, 4), new THREE.MeshStandardMaterial({color: 0xB22222}));
+            roof.position.y = 5; roof.rotation.y = Math.PI / 4; roof.castShadow = true;
+            group.add(base, roof); return group;
+        }
+        for (let i = -50; i < 150; i += 20) {
+            const objLeft = Math.random() > 0.5 ? createTree() : createHouse();
+            objLeft.position.set(-roadWidth/2 - 3 - Math.random() * 5, 0, -i); scene.add(objLeft); objects.push(objLeft);
+            const objRight = Math.random() > 0.5 ? createTree() : createHouse();
+            objRight.position.set(roadWidth/2 + 3 + Math.random() * 5, 0, -i); scene.add(objRight); objects.push(objRight);
+        }
+
+        // --- МАШИНА ИГРОКА (Исправлена ориентация: перед смотрит в -Z) ---
+        const car = new THREE.Group();
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.6, roughness: 0.3 });
+        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.1 });
+        
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 3.2), bodyMat);
+        body.position.y = 0.4; body.castShadow = true; car.add(body);
+        
+        // Капот (спереди, -Z)
+        const hood = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 1.0), bodyMat);
+        hood.position.set(0, 0.7, -0.9); hood.castShadow = true; car.add(hood);
+        
+        // Багажник (сзади, +Z)
+        const trunk = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 0.8), bodyMat);
+        trunk.position.set(0, 0.75, 1.2); trunk.castShadow = true; car.add(trunk);
+        
+        // Кабина
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 1.4), cabinMat);
+        cabin.position.set(0, 0.9, 0.1); cabin.castShadow = true; car.add(cabin);
+
+        // Спойлер (сзади, +Z)
+        const spoilerMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+        const spoilerBar = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.05, 0.3), spoilerMat);
+        spoilerBar.position.set(0, 0.9, 1.6); car.add(spoilerBar);
+        
+        // Фары (спереди, -Z)
+        const headMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
+        const headL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.1), headMat); headL.position.set(-0.5, 0.6, -1.61); car.add(headL);
+        const headR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.1), headMat); headR.position.set(0.5, 0.6, -1.61); car.add(headR);
+        
+        // Стопы (сзади, +Z)
+        const tailMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const tailL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.1), tailMat); tailL.position.set(-0.5, 0.6, 1.61); car.add(tailL);
+        const tailR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.1), tailMat); tailR.position.set(0.5, 0.6, 1.61); car.add(tailR);
+
+        // Колеса
+        const tireGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 16);
+        const tireMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+        const rimGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.32, 8);
+        const rimMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8 });
+
+        const wheels = []; const frontWheels = [];
+        const wheelPositions = [{ x: -0.9, y: 0.35, z: -1.1, isFront: true }, { x: 0.9, y: 0.35, z: -1.1, isFront: true }, { x: -0.9, y: 0.35, z: 1.1, isFront: false }, { x: 0.9, y: 0.35, z: 1.1, isFront: false }];
+        
+        wheelPositions.forEach(pos => {
+            const pivot = new THREE.Group(); pivot.position.set(pos.x, pos.y, pos.z);
+            const tire = new THREE.Mesh(tireGeo, tireMat); tire.rotation.z = Math.PI / 2; tire.castShadow = true;
+            const rim = new THREE.Mesh(rimGeo, rimMat); rim.rotation.z = Math.PI / 2;
+            pivot.add(tire, rim); car.add(pivot);
+            wheels.push(tire); if (pos.isFront) frontWheels.push(pivot);
+        });
+
+        car.position.set(2, 0, 0); scene.add(car);
+
+        // --- ТРАФИК (Меньше машин) ---
+        const traffic = [];
+        const trafficColors = [0x0000ff, 0x00ff00, 0xffff00, 0xffffff, 0x800080];
+
+        function createDetailedTrafficCar(isOncoming) {
+            const tCar = new THREE.Group();
+            const color = trafficColors[Math.floor(Math.random() * trafficColors.length)];
+            const tBodyMat = new THREE.MeshStandardMaterial({ color: color, metalness: 0.4, roughness: 0.6 });
+            
+            const tBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 3), tBodyMat);
+            tBody.position.y = 0.4; tBody.castShadow = true; tCar.add(tBody);
+            
+            const tCabin = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.4, 1.5), cabinMat);
+            tCabin.position.set(0, 0.85, 0.1); tCabin.castShadow = true; tCar.add(tCabin);
+
+            // Базовые фары (перед -Z, зад +Z)
+            const tHead = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.15, 0.1), headMat);
+            tHead.position.set(0, 0.4, -1.51); tCar.add(tHead);
+            const tTail = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.15, 0.1), tailMat);
+            tTail.position.set(0, 0.4, 1.51); tCar.add(tTail);
+
+            if (isOncoming) {
+                tCar.rotation.y = Math.PI; // Разворачиваем встречку на 180 градусов
+            }
+
+            tCar.position.set(isOncoming ? -2 : 2, 0, -50 - Math.random() * 100);
+            scene.add(tCar);
+            traffic.push({ mesh: tCar, isOncoming: isOncoming, speed: isOncoming ? 20 + Math.random() * 10 : 5 + Math.random() * 5 });
+        }
+
+        // Спавним всего по 3 машины на полосу
+        for (let i = 0; i < 3; i++) { createDetailedTrafficCar(true); createDetailedTrafficCar(false); }
+
+        // --- Управление ---
+        let isDragging = false; let targetSteer = 0; let currentSteer = 0;
+        const wheelEl = document.getElementById('steering-wheel');
+        const wheelContainer = document.getElementById('steering-container');
+
+        function handleTouch(e) {
+            e.preventDefault();
+            if (e.type === 'touchstart' || e.type === 'mousedown') isDragging = true;
+            if (!isDragging) return;
+            const touch = e.touches ? e.touches[0] : e;
+            const rect = wheelEl.getBoundingClientRect();
+            const dx = touch.clientX - (rect.left + rect.width / 2);
+            const dy = touch.clientY - (rect.top + rect.height / 2);
+            let angle = Math.atan2(dx, -dy); 
+            angle = Math.max(-Math.PI/2, Math.min(Math.PI/2, angle));
+            wheelEl.style.transform = `rotate(${angle}rad)`;
+            targetSteer = angle / (Math.PI/2);
+        }
+        wheelContainer.addEventListener('touchstart', handleTouch);
+        wheelContainer.addEventListener('touchmove', handleTouch);
+        wheelContainer.addEventListener('touchend', () => { isDragging = false; });
+        wheelContainer.addEventListener('mousedown', handleTouch);
+        window.addEventListener('mousemove', handleTouch);
+        window.addEventListener('mouseup', () => { isDragging = false; });
+
+        // --- Игра ---
+        let speed = 20; let score = 0; let isGameOver = false;
+        const scoreEl = document.getElementById('score');
+        const restartBtn = document.getElementById('restart-btn');
+        const gameOverEl = document.getElementById('game-over');
+
+        function resetGame() {
+            isGameOver = false; speed = 20; score = 0; scoreEl.innerText = "Счёт: 0";
+            car.position.set(2, 0, 0); car.rotation.set(0, 0, 0);
+            targetSteer = 0; currentSteer = 0; wheelEl.style.transform = `rotate(0rad)`;
+            gameOverEl.style.display = 'none'; restartBtn.style.display = 'none';
+            traffic.forEach(t => { t.mesh.position.z = -50 - Math.random() * 100; });
+        }
+        restartBtn.addEventListener('click', resetGame);
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = Math.min(clock.getDelta(), 0.1);
+
+            if (!isGameOver) {
+                if (!isDragging) {
+                    targetSteer = THREE.MathUtils.lerp(targetSteer, 0, 5 * delta);
+                    wheelEl.style.transform = `rotate(${targetSteer * (Math.PI/2)}rad)`;
+                }
+                currentSteer = THREE.MathUtils.lerp(currentSteer, targetSteer, 10 * delta);
+
+                // Движение вперед (по оси -Z)
+                car.position.z -= speed * delta;
+                car.position.x += currentSteer * 12 * delta; 
+                car.position.x = Math.max(-roadWidth/2 + 1, Math.min(roadWidth/2 - 1, car.position.x));
+
+                // Правильный наклон: при повороте направо (currentSteer > 0) машина наклоняется вправо
+                car.rotation.z = -currentSteer * 0.15; 
+                car.rotation.y = -currentSteer * 0.15; // Нос поворачивает в сторону движения
+
+                // Вращение колес и руля
+                wheels.forEach(w => { w.rotation.x -= speed * delta * 2; });
+                frontWheels.forEach(w => { w.rotation.y = -currentSteer * 0.5; });
+
+                // Камера
+                camera.position.x = car.position.x * 0.5;
+                camera.position.z = car.position.z + 10;
+                camera.lookAt(car.position.x * 0.5, 1, car.position.z - 15);
+
+                score += speed * delta;
+                scoreEl.innerText = "Счёт: " + Math.floor(score);
+
+                // Бесконечная дорога
+                road.position.z = car.position.z;
+                grassLeft.position.z = car.position.z;
+                grassRight.position.z = car.position.z;
+                lines.forEach(line => { if (line.position.z > car.position.z + 20) line.position.z -= 200; });
+                objects.forEach(obj => { if (obj.position.z > camera.position.z + 20) obj.position.z -= 200; });
+
+                // Логика трафика
+                traffic.forEach((t) => {
+                    if (t.isOncoming) {
+                        t.mesh.position.z += (t.speed + speed) * delta; // Едет навстречу
+                        if (t.mesh.position.z > camera.position.z + 20) {
+                            t.mesh.position.z = car.position.z - 150 - Math.random() * 100; // Респавн вдали
+                        }
+                    } else {
+                        t.mesh.position.z -= (speed - t.speed) * delta; // Едет попутно (медленнее нас)
+                        if (t.mesh.position.z > camera.position.z + 20) {
+                            t.mesh.position.z = car.position.z - 150 - Math.random() * 100; // Респавн вдали
+                        }
+                    }
+                    // Столкновения
+                    const dx = Math.abs(car.position.x - t.mesh.position.x);
+                    const dz = Math.abs(car.position.z - t.mesh.position.z);
+                    if (dx < 1.5 && dz < 2.5) {
+                        isGameOver = true;
+                        gameOverEl.style.display = 'block';
+                        restartBtn.style.display = 'block';
+                    }
+                });
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
